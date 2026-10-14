@@ -1,0 +1,33 @@
+name: mimo_env2
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - pip
+  - pandas
+  - scipy
+  - numpy
+  - matplotlib
+  - seaborn
+  - statsmodels
+  - scikit-learn
+  - pywavelets
+  - tqdm
+  - xarray
+  - pip:
+    - notebook
+    - ipywidgets
+    - ipympl
+    - ipydatagrid
+    - pynapple
+    - pyabf
+    - twine
+    - dclut
+    - opencv_python
+    - bottleneck
+    - numba
+    - rdp
+    - h5netcdf
+    - netcdf4
+    - panel
