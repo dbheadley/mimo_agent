@@ -2,10 +2,13 @@
 # Author: Drew Headley
 # Date: 2025-07-11
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pandas as pd
 import pynapple as nap
-from scipy.ndimage import label
+from numba import njit
 from scipy.stats import poisson as sp_poisson
 from tqdm import tqdm
 
@@ -155,34 +158,58 @@ def ccg_convolution_significance(cc, kernel_half_width=5):
 
     return p_vals_ex, p_vals_in, baseline_ex, baseline_in
 
-def _significant_run_peaks(signif, deviation, min_len, max_len):
+def _mad_significant_run(window_mask, signif_ex, signif_in, excess, undershoot):
     """
-    Find runs of consecutive significant bins and the peak bin of each run.
+    Test the maximum-absolute-deviation (MAD) bin of a lag window and, if it
+    is significant, grow the run of significant bins outward from it.
+
+    Only one bin is tested, so no multiple-comparison correction is needed.
+    The MAD bin is the bin with the largest absolute deviation from baseline
+    among the excitatory (largest positive ``excess``) and inhibitory
+    (largest negative ``undershoot``) candidates; ties go to excitatory.
+    The run extends toward earlier and later lags while adjacent bins remain
+    significant (same sign, same uncorrected alpha) and inside the window.
 
     Parameters
     ----------
-    signif : numpy.ndarray
-        Boolean array flagging significant bins.
-    deviation : numpy.ndarray
-        Signed deviation from baseline (count - baseline); the peak of a run
-        is the bin with the largest absolute deviation.
-    min_len, max_len : int
-        Inclusive bounds on the run length (in bins).
+    window_mask : numpy.ndarray
+        Boolean mask over lag bins selecting the (contiguous) lag window.
+    signif_ex, signif_in : numpy.ndarray
+        Boolean arrays flagging bins significant for the excitatory /
+        inhibitory test.
+    excess, undershoot : numpy.ndarray
+        Deviation of counts from the excitatory / inhibitory baseline.
 
     Returns
     -------
-    list of tuple
-        (peak_index, absolute_deviation) for each run within the length bounds.
+    tuple or None
+        ``(peak, sign, start, end)`` bin indices (``start <= peak <= end``) and
+        sign (+1/-1), or None if the window is empty or its MAD bin is not
+        significant.
     """
-    labels, n_runs = label(signif)
-    peaks = []
-    for run_id in range(1, n_runs + 1):
-        idx = np.flatnonzero(labels == run_id)
-        if not min_len <= idx.size <= max_len:
-            continue
-        peak = idx[np.argmax(np.abs(deviation[idx]))]
-        peaks.append((peak, abs(deviation[peak])))
-    return peaks
+    idx = np.flatnonzero(window_mask)
+    if idx.size == 0:
+        return None
+    lo, hi = int(idx[0]), int(idx[-1])
+
+    dev_ex = np.nan_to_num(excess[lo:hi + 1], nan=-np.inf)
+    dev_in = np.nan_to_num(-undershoot[lo:hi + 1], nan=-np.inf)
+    ex_peak = int(np.argmax(dev_ex))
+    in_peak = int(np.argmax(dev_in))
+    if dev_ex[ex_peak] >= dev_in[in_peak]:
+        sign, peak, signif = 1, lo + ex_peak, signif_ex
+    else:
+        sign, peak, signif = -1, lo + in_peak, signif_in
+
+    if not signif[peak]:
+        return None
+
+    start = end = peak
+    while start > lo and signif[start - 1]:
+        start -= 1
+    while end < hi and signif[end + 1]:
+        end += 1
+    return peak, sign, start, end
 
 def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in, cc,
                                   lag_min_abs, lag_max_abs,
@@ -191,15 +218,22 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
     """
     Return significant monosynaptic connections from CCG p-value DataFrames.
 
-    For each pair column, runs of consecutive significant bins (same sign,
-    Bonferroni-corrected threshold of alpha over the number of lag bins) are
-    identified across the full CCG. A run is kept if its length is between
-    min_contiguous_bins and max_contiguous_bins. The peak of a run is the bin
-    with the largest absolute deviation of the spike count from baseline. A
-    run is accepted only if its peak lies within the positive or negative lag
-    window; the remaining bins of the run may lie outside the windows. Within
-    each window, the accepted run with the largest absolute deviation is
-    reported, yielding up to one connection per ordered pair direction.
+    For each pair column and each lag window (positive: ``lag_min_abs < lag <=
+    lag_max_abs``; negative: the mirrored window), only the bin of maximum
+    absolute deviation (MAD) of the spike count from baseline is tested. The
+    MAD bin is the larger of the largest excitatory deviation (count minus
+    excitatory baseline) and the largest inhibitory deviation (baseline_in
+    minus count) in the window. Because a single bin is tested per window and
+    direction, no multiple-comparison (Bonferroni) correction is applied; the
+    bin is significant if its p-value is below ``alpha``.
+
+    If the MAD bin is significant, the run of significant bins is grown
+    outward from it toward earlier and later lags, staying within the window.
+    A neighbor joins the run if it has the same sign and is significant at the
+    same uncorrected ``alpha``; growth stops at the first non-significant bin
+    or at the window edge. The run is reported if its width in bins is between
+    ``min_contiguous_bins`` and ``max_contiguous_bins`` (inclusive). This
+    yields up to one connection per ordered pair direction.
 
     Parameters
     ----------
@@ -219,14 +253,14 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
     lag_max_abs : float
         Maximum absolute lag (seconds) for a monosynaptic transmission delay.
     min_contiguous_bins : int, optional
-        Minimum number of consecutive significant bins in a run, counting
-        bins outside the lag windows. Default is 2.
+        Minimum width (bins) of the significant run around the MAD bin; the
+        run is confined to the lag window. Default is 2.
     alpha : float, optional
-        Per-pair significance level; Bonferroni correction over lag bins is
-        applied internally. Default is 0.05.
+        Uncorrected significance level applied to the MAD bin and to each
+        bin added to the run. Default is 0.05.
     max_contiguous_bins : int, optional
-        Maximum number of consecutive significant bins in a run; longer runs
-        are treated as broad co-modulation and rejected. Default is 10.
+        Maximum width (bins) of the significant run; wider runs are treated
+        as broad co-modulation and rejected. Default is 10.
 
     Returns
     -------
@@ -236,11 +270,31 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
         direction : tuple
             (pre_unit_id, post_unit_id).
         lag_s : float
-            Absolute transmission delay in seconds.
+            Absolute transmission delay (seconds) of the MAD bin.
         sign : int
             +1 (excitatory) or -1 (inhibitory).
         amplitude : float
-            (count - baseline) / baseline at the peak bin.
+            (count - baseline) / baseline at the MAD bin.
+        run_start_s : float
+            Smallest absolute lag (seconds) in the significant run.
+        run_end_s : float
+            Largest absolute lag (seconds) in the significant run.
+        run_width_bins : int
+            Number of bins in the significant run.
+
+    Raises
+    ------
+    TypeError
+        If ``cc`` is not a pandas.DataFrame.
+
+    Examples
+    --------
+    >>> p_ex, p_in, bl_ex, bl_in = ccg_convolution_significance(cc_counts)
+    >>> conns = find_significant_connections(
+    ...     p_ex, p_in, bl_ex, bl_in, cc_counts,
+    ...     lag_min_abs=0.001, lag_max_abs=0.010)
+    >>> conns[0]['run_width_bins']  # doctest: +SKIP
+    3
     """
     if not isinstance(cc, pd.DataFrame):
         raise TypeError("cc must be a pandas.DataFrame of cross-correlogram counts.")
@@ -248,7 +302,6 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
     lags       = cc.index.values
     pos_window = (lags >  lag_min_abs) & (lags <= lag_max_abs)
     neg_window = (lags >= -lag_max_abs) & (lags < -lag_min_abs)
-    alpha_corr = alpha / len(cc)  # Bonferroni over lag bins
 
     connections = []
     for col in tqdm(cc.columns, desc='Finding connections', leave=False):
@@ -259,33 +312,319 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
         excess     = counts - bl_ex
         undershoot = counts - bl_in
 
-        signif_ex = (p_vals_ex[col].values < alpha_corr) & (excess > 0) & (bl_ex > 0)
-        signif_in = (p_vals_in[col].values < alpha_corr) & (undershoot < 0)
-
-        # (peak index, absolute deviation, sign, baseline at peak)
-        candidates = []
-        for signif, dev, sign, bl in [(signif_ex, excess, 1, bl_ex),
-                                      (signif_in, undershoot, -1, bl_in)]:
-            for peak, mag in _significant_run_peaks(
-                    signif, dev, min_contiguous_bins, max_contiguous_bins):
-                candidates.append((peak, mag, sign, bl[peak]))
+        # Uncorrected alpha: only the MAD bin (and its neighbors, tested
+        # one at a time while growing the run) is ever evaluated.
+        signif_ex = (p_vals_ex[col].values < alpha) & (excess > 0) & (bl_ex > 0)
+        signif_in = (p_vals_in[col].values < alpha) & (undershoot < 0)
 
         for window_mask, direction in [
             (pos_window, (unit_i, unit_j)),
             (neg_window, (unit_j, unit_i)),
         ]:
-            in_win = [c for c in candidates if window_mask[c[0]]]
-            if not in_win:
+            run = _mad_significant_run(window_mask, signif_ex, signif_in,
+                                       excess, undershoot)
+            if run is None:
                 continue
-            sel, _, sign, bl_peak = max(in_win, key=lambda c: c[1])
+            sel, sign, start, end = run
+            width = end - start + 1
+            if not min_contiguous_bins <= width <= max_contiguous_bins:
+                continue
+            bl_peak = bl_ex[sel] if sign == 1 else bl_in[sel]
+            run_lags = np.abs(lags[[start, end]])
             connections.append({
-                'direction': direction,
-                'lag_s':     abs(lags[sel]),
-                'sign':      sign,
-                'amplitude': (counts[sel] - bl_peak) / bl_peak if bl_peak > 0 else np.nan,
+                'direction':      direction,
+                'lag_s':          abs(lags[sel]),
+                'sign':           sign,
+                'amplitude':      (counts[sel] - bl_peak) / bl_peak if bl_peak > 0 else np.nan,
+                'run_start_s':    float(run_lags.min()),
+                'run_end_s':      float(run_lags.max()),
+                'run_width_bins': int(width),
             })
 
     return connections
+
+
+@njit(nogil=True, cache=True)
+def _ccg_counts(t_ref, t_tgt, binsize, n_lags, out):
+    """Accumulate CCG counts of t_tgt relative to t_ref into ``out`` in place.
+
+    Bins match pynapple's ``compute_crosscorrelogram``: with half-width
+    ``w = n_lags / 2 * binsize``, bin j spans
+    ``[-w + j * binsize, -w + (j + 1) * binsize)``. Both inputs must be sorted.
+    """
+    w = (n_lags / 2.0) * binsize
+    n_tgt = t_tgt.size
+    i2 = 0
+    for i1 in range(t_ref.size):
+        lbound = t_ref[i1] - w
+        while i2 < n_tgt and t_tgt[i2] < lbound:
+            i2 += 1
+        rbound = t_ref[i1] + w
+        k = i2
+        while k < n_tgt and t_tgt[k] < rbound:
+            j = int((t_tgt[k] - lbound) / binsize)
+            if j >= n_lags:
+                j = n_lags - 1
+            out[j] += 1.0
+            k += 1
+
+
+@njit(nogil=True, cache=True)
+def _interval_jitter(win_start, jitter_window, out):
+    """Redraw each spike uniformly within its jitter window, then sort ``out``.
+
+    ``win_start`` is sorted, so the jittered times are only out of order within
+    a window and an insertion sort is close to linear.
+    """
+    n = win_start.size
+    for i in range(n):
+        out[i] = win_start[i] + np.random.random() * jitter_window
+    for i in range(1, n):
+        v = out[i]
+        k = i - 1
+        while k >= 0 and out[k] > v:
+            out[k + 1] = out[k]
+            k -= 1
+        out[k + 1] = v
+
+
+@njit(nogil=True, cache=True)
+def _jitter_spike_times_kernel(win_start, jitter_window, n_surrogates, seed):
+    np.random.seed(seed)
+    out = np.empty((n_surrogates, win_start.size))
+    for s in range(n_surrogates):
+        _interval_jitter(win_start, jitter_window, out[s])
+    return out
+
+
+@njit(nogil=True, cache=True)
+def _jitter_ccg_kernel(t_ref, win_start, binsize, n_lags, jitter_window,
+                       n_surrogates, seed):
+    """Surrogate CCG counts (n_surrogates, n_lags) with the target jittered."""
+    np.random.seed(seed)
+    out = np.zeros((n_surrogates, n_lags))
+    jit = np.empty(win_start.size)
+    for s in range(n_surrogates):
+        _interval_jitter(win_start, jitter_window, jit)
+        _ccg_counts(t_ref, jit, binsize, n_lags, out[s])
+    return out
+
+
+def _spike_times_array(spike_times, name='spike_times'):
+    """Return sorted float64 spike times from a nap.Ts/Tsd or array-like."""
+    if isinstance(spike_times, (nap.Ts, nap.Tsd)):
+        t = np.asarray(spike_times.t, dtype=np.float64)
+    elif isinstance(spike_times, (np.ndarray, list, tuple)):
+        t = np.asarray(spike_times, dtype=np.float64)
+    else:
+        raise TypeError(
+            f"{name} must be a pynapple.Ts/Tsd or a 1D array of times in seconds, "
+            f"got {type(spike_times).__name__}.")
+    if t.ndim != 1:
+        raise ValueError(f"{name} must be 1D, got shape {t.shape}.")
+    return np.sort(t)
+
+
+def _jitter_window_starts(t, jitter_window):
+    return np.floor(t / jitter_window) * jitter_window
+
+
+def jitter_spike_times(spike_times, jitter_window=0.004, n_surrogates=1, seed=None):
+    """
+    Generate interval-jittered surrogates of a spike train.
+
+    Time is partitioned into fixed, non-overlapping windows
+    ``[k * jitter_window, (k + 1) * jitter_window)`` and each spike is redrawn
+    uniformly within its own window (Amarasingham et al., 2012). Spike counts
+    per window, and therefore firing-rate fluctuations slower than the window,
+    are preserved while finer spike timing is destroyed.
+
+    Parameters
+    ----------
+    spike_times : pynapple.Ts or array-like
+        Spike times in seconds.
+    jitter_window : float, optional
+        Jitter window width in seconds. Default is 0.004.
+    n_surrogates : int, optional
+        Number of surrogate spike trains. Default is 1.
+    seed : int, optional
+        Seed for reproducible surrogates.
+
+    Returns
+    -------
+    numpy.ndarray
+        Jittered spike times, shape (n_surrogates, n_spikes). Each row is sorted.
+
+    Examples
+    --------
+    >>> t = np.sort(np.random.uniform(0, 10, 100))
+    >>> surr = jitter_spike_times(t, jitter_window=0.004, n_surrogates=10, seed=0)
+    >>> surr.shape
+    (10, 100)
+    """
+    t = _spike_times_array(spike_times)
+    if not np.isscalar(jitter_window) or jitter_window <= 0:
+        raise ValueError(f"jitter_window must be a positive number, got {jitter_window}.")
+    if int(n_surrogates) < 1:
+        raise ValueError(f"n_surrogates must be >= 1, got {n_surrogates}.")
+    seed_int = int(np.random.SeedSequence(seed).generate_state(1, dtype=np.uint32)[0])
+    return _jitter_spike_times_kernel(
+        _jitter_window_starts(t, float(jitter_window)), float(jitter_window),
+        int(n_surrogates), seed_int)
+
+
+def ccg_jitter_significance(spks, cc, jitter_window=0.004, n_surrogates=1000,
+                            n_jobs=1, seed=None, p_method='poisson'):
+    """
+    Compute per-bin p-values for cross-correlograms against interval-jitter
+    surrogates of the target unit.
+
+    For each ``(ref, tgt)`` column of ``cc`` the target spike train is
+    interval-jittered (see :func:`jitter_spike_times`) ``n_surrogates`` times
+    and the surrogate CCG counts are computed against the unjittered reference
+    spikes, using bins aligned to ``cc.index``. The surrogate mean is the
+    baseline that captures co-modulation slower than ``jitter_window``. The
+    outputs have the same format as :func:`ccg_convolution_significance`, so
+    they can be passed directly to :func:`find_significant_connections`.
+
+    Parameters
+    ----------
+    spks : pynapple.TsGroup
+        Spike trains in seconds; must contain every unit referenced by the
+        columns of ``cc``. Use the same (restricted) group that produced ``cc``.
+    cc : pandas.DataFrame
+        Cross-correlogram spike counts indexed by lag (seconds) with
+        ``(ref, tgt)`` tuple columns, as derived from
+        ``pynapple.compute_crosscorrelogram(norm=False)``. Typically a subset
+        of columns that passed :func:`ccg_convolution_significance`.
+    jitter_window : float, optional
+        Interval-jitter window width in seconds. Default is 0.004.
+    n_surrogates : int, optional
+        Number of jittered surrogates per pair. Default is 1000.
+    n_jobs : int, optional
+        Number of threads used across pairs; -1 uses all CPUs. Default is 1.
+    seed : int, optional
+        Seed for reproducible surrogates. Results do not depend on ``n_jobs``.
+    p_method : {'poisson', 'empirical'}, optional
+        ``'poisson'`` (default) computes Poisson tail probabilities with mean
+        equal to the surrogate mean. Under target jitter each bin count is a
+        sum of independent Bernoulli variables (Poisson-binomial), whose
+        variance does not exceed its mean, so Poisson tails are conservative.
+        Unlike empirical p-values, they can resolve small significance
+        thresholds used by :func:`find_significant_connections`.
+        ``'empirical'`` returns ``(1 + #{surrogate >= count}) / (1 + N)``
+        (excitatory) and ``(1 + #{surrogate <= count}) / (1 + N)``
+        (inhibitory); these cannot fall below ``1 / (1 + n_surrogates)``.
+
+    Returns
+    -------
+    p_vals_ex : pandas.DataFrame
+        Per-bin excitatory p-values, P(X >= count).
+    p_vals_in : pandas.DataFrame
+        Per-bin inhibitory p-values, P(X <= count).
+    baseline_ex : pandas.DataFrame
+        Surrogate mean counts per bin.
+    baseline_in : pandas.DataFrame
+        Surrogate mean counts per bin (identical to ``baseline_ex``).
+
+    Examples
+    --------
+    >>> p_ex, p_in, bl_ex, bl_in = ccg_jitter_significance(
+    ...     su_spks, cc_counts[tested_cols], jitter_window=0.004,
+    ...     n_surrogates=1000, n_jobs=-1, seed=0)
+    >>> conns = find_significant_connections(
+    ...     p_ex, p_in, bl_ex, bl_in, cc_counts[tested_cols],
+    ...     lag_min_abs=0.001, lag_max_abs=0.010)
+    """
+    if not isinstance(spks, nap.TsGroup):
+        raise TypeError(f"spks must be a pynapple.TsGroup, got {type(spks).__name__}.")
+    if not isinstance(cc, pd.DataFrame):
+        raise TypeError("cc must be a pandas.DataFrame of cross-correlogram counts.")
+    if p_method not in ('poisson', 'empirical'):
+        raise ValueError(f"p_method must be 'poisson' or 'empirical', got {p_method!r}.")
+    if not np.isscalar(jitter_window) or jitter_window <= 0:
+        raise ValueError(f"jitter_window must be a positive number, got {jitter_window}.")
+    if int(n_surrogates) < 1:
+        raise ValueError(f"n_surrogates must be >= 1, got {n_surrogates}.")
+    if len(cc.index) < 2:
+        raise ValueError("cc must have at least two lag bins.")
+    for col in cc.columns:
+        if not (isinstance(col, tuple) and len(col) == 2):
+            raise ValueError(f"cc columns must be (ref, tgt) tuples, got {col!r}.")
+        missing = [u for u in col if u not in spks.index]
+        if missing:
+            raise ValueError(f"Units {missing} from cc column {col} are not in spks.")
+
+    lags = cc.index.to_numpy(dtype=float)
+    n_lags = lags.size
+    binsize = float(np.median(np.diff(lags)))
+    half_width = (n_lags / 2.0) * binsize
+    jitter_window = float(jitter_window)
+    n_surrogates = int(n_surrogates)
+
+    columns = list(cc.columns)
+    child_seeds = np.random.SeedSequence(seed).spawn(len(columns))
+    pair_seeds = [int(s.generate_state(1, dtype=np.uint32)[0]) for s in child_seeds]
+    times = {}
+
+    def unit_times(uid):
+        if uid not in times:
+            times[uid] = np.ascontiguousarray(_spike_times_array(spks[uid]))
+        return times[uid]
+
+    for col in columns:
+        unit_times(col[0])
+        unit_times(col[1])
+
+    def run_pair(i):
+        ref, tgt = columns[i]
+        t_ref = times[ref]
+        win_start = _jitter_window_starts(times[tgt], jitter_window)
+        # Exact pruning: drop target windows that cannot reach any reference spike's CCG window.
+        if t_ref.size and win_start.size:
+            idx = np.searchsorted(t_ref, win_start - half_width, side='left')
+            reachable = idx < t_ref.size
+            reachable[reachable] = (t_ref[idx[reachable]]
+                                    < win_start[reachable] + jitter_window + half_width)
+            win_start = win_start[reachable]
+        if win_start.size == 0 or t_ref.size == 0:
+            return np.zeros((n_surrogates, n_lags))
+        return _jitter_ccg_kernel(t_ref, np.ascontiguousarray(win_start), binsize,
+                                  n_lags, jitter_window, n_surrogates, pair_seeds[i])
+
+    n_workers = os.cpu_count() if n_jobs in (-1, None) else max(1, int(n_jobs))
+    surrogates = [None] * len(columns)
+    with tqdm(total=len(columns), desc='CCG jitter', leave=False) as pbar:
+        if n_workers == 1:
+            for i in range(len(columns)):
+                surrogates[i] = run_pair(i)
+                pbar.update(1)
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                for i, surr in zip(range(len(columns)),
+                                   pool.map(run_pair, range(len(columns)))):
+                    surrogates[i] = surr
+                    pbar.update(1)
+
+    baseline = pd.DataFrame(np.nan, index=cc.index, columns=cc.columns)
+    p_vals_ex = pd.DataFrame(np.nan, index=cc.index, columns=cc.columns)
+    p_vals_in = pd.DataFrame(np.nan, index=cc.index, columns=cc.columns)
+    for i, col in enumerate(columns):
+        counts = cc[col].to_numpy(dtype=float)
+        surr = surrogates[i]
+        mu = surr.mean(axis=0)
+        baseline[col] = mu
+        if p_method == 'poisson':
+            mu_safe = np.maximum(mu, 1e-10)
+            p_vals_ex[col] = sp_poisson.sf(counts - 1, mu_safe)
+            p_vals_in[col] = sp_poisson.cdf(counts, mu_safe)
+        else:
+            p_vals_ex[col] = (1 + (surr >= counts).sum(axis=0)) / (1 + n_surrogates)
+            p_vals_in[col] = (1 + (surr <= counts).sum(axis=0)) / (1 + n_surrogates)
+
+    return p_vals_ex, p_vals_in, baseline, baseline.copy()
+
+
 if __name__ == "__main__":
 
     import matplotlib.pyplot as plt
