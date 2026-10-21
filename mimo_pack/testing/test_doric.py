@@ -47,6 +47,28 @@ def test_load_doric_reads_analog_input_variants(tmp_path):
     assert analog_in_xr.attrs["description"].startswith("Doric analog input:")
 
 
+def test_load_doric_keeps_dio_at_native_sampling(tmp_path):
+    """Digital IO is returned on its own time base, not resampled to fp."""
+    doric_path = tmp_path / "synthetic_dio.doric"
+    fp_time = np.arange(4, dtype=float)
+    dio_time = np.arange(0, 4, 0.25)
+    dio_values = (np.arange(dio_time.size) % 2).astype(float)
+
+    with h5py.File(doric_path, "w") as doric_file:
+        doric_file.create_dataset("Series0001/LockInAOUT01/Time", data=fp_time)
+        doric_file.create_dataset(
+            "Series0001/LockInAOUT01/AIN01", data=np.arange(fp_time.size)
+        )
+        doric_file.create_dataset("Series0001/DigitalIO/Time", data=dio_time)
+        doric_file.create_dataset("Series0001/DigitalIO/DIO01", data=dio_values)
+
+    dio_xr = load_doric(str(doric_path), sig_channels=None, iso_channels=None)['dio']
+
+    np.testing.assert_array_equal(dio_xr[DIM_TIME], dio_time)
+    np.testing.assert_array_equal(dio_xr.values[:, 0], dio_values)
+    assert dio_xr.attrs[ATTR_FS] == 4.0
+
+
 def test_load_doric_splits_signal_and_isosbestic_channels(tmp_path):
     """sig_channels/iso_channels select the fpsig/fpiso outputs."""
     doric_path = tmp_path / "synthetic_fp.doric"

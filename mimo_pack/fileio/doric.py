@@ -8,7 +8,6 @@ import numpy as np
 import xarray as xr
 from dclut import create_dclut
 from mimo_pack.util.hdf5 import get_h5_hierarchy
-from scipy.interpolate import interp1d
 from mimo_pack.consts import ATTR_FS, DIM_TIME, DIM_CHAN
 
 def load_doric(doric_file_path: str,
@@ -56,9 +55,10 @@ def load_doric(doric_file_path: str,
             - channel: The hierarchy of keys that led to the dataset.
         - 'dio': xarray.DataArray or None
             An xarray.DataArray containing the digital output signals in
-            the doric file. The data is organized into a 2D array with the
-            dimensions:
-            - time: The time points of the recording.
+            the doric file at their native sampling (not resampled to the
+            fiber photometry time points). The data is organized into a 2D
+            array with the dimensions:
+            - time: The native digital IO time points.
             - channel: The hierarchy of keys that led to the dataset.
         - 'analog_in': xarray.DataArray or None
             An xarray.DataArray containing the analog input signals in the
@@ -169,7 +169,7 @@ def load_doric(doric_file_path: str,
             power.time.attrs['units'] = 's'
 
     # Extract digital IO channels if present
-    if has_dio and fp is not None:
+    if has_dio:
         dio_time_indices = np.where(is_time & is_dio)[0]
         dio_idx = np.where(~is_time & is_dio)[0]
         
@@ -180,19 +180,11 @@ def load_doric(doric_file_path: str,
             dio_time_coord = np.array(data_series[dio_time_idx])
             sample_rate_dio = 1.0 / np.median(np.diff(dio_time_coord))
 
-            # Resample digital IO to match fp time points
-            interp_func = interp1d(
-                dio_time_coord, dio_2d, axis=0, kind='nearest', 
-                bounds_error=False, fill_value=(dio_2d[0], dio_2d[-1])
-            )
-            dio_2d_resampled = interp_func(fp.time.values)
-            dio_time_resampled = fp.time.values
-
             dio = xr.DataArray(
-                dio_2d_resampled,
+                dio_2d,
                 dims=(DIM_TIME, DIM_CHAN),
                 coords={
-                    DIM_TIME: dio_time_resampled,
+                    DIM_TIME: dio_time_coord,
                     DIM_CHAN: dio_ch
                 }
             )
@@ -287,7 +279,10 @@ def doric_to_binary_dclut(doric_file_path: str, out_dir: str = None, dtype: str 
         if xr_data is None:
             continue
         # Interpolate if time axes differ
-        if not np.array_equal(xr_data.time.values, time):
+        if xr_data is dio_xr and not np.array_equal(xr_data.time.values, time):
+            # Digital signals take the nearest sample rather than linear blends
+            traces.append(xr_data.sel({DIM_TIME: time}, method='nearest').values)
+        elif not np.array_equal(xr_data.time.values, time):
             interp = np.empty((len(time), xr_data.shape[1]), dtype=xr_data.dtype)
             for i in range(xr_data.shape[1]):
                 interp[:, i] = np.interp(time, xr_data.time.values, xr_data[:, i])
