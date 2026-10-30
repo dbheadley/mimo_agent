@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 import argparse
 import re
 import json
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 import pandas as pd
 import numpy as np
 import pdb
@@ -122,7 +122,7 @@ def tif_to_video(folder_path, output_base=None, fps=30):
 
     # Loop over all TIF files; skip and exclude any that cannot be read
     written_indices = []
-    for idx, curr_row in tqdm(files_df.iterrows(), total=len(files_df)):
+    for idx, curr_row in Progress(files_df.iterrows(), total=len(files_df)):
         img = cv2.imread(curr_row['tif_path'])
         if img is None:
             print(f"Warning: skipping unreadable TIF: '{curr_row['tif_path']}'")
@@ -321,7 +321,7 @@ def track_video_rois(video_path, table_path=None, rois=None, roi_suffix='roi_'):
 
     roi_arr = np.zeros((num_frames, len(rois), 3))
 
-    for i in tqdm(range(num_frames)):
+    for i in Progress(range(num_frames)):
         ret, frame = cap.read()
         if not ret:
             break
@@ -424,7 +424,7 @@ def track_video_diff(video_path, table_path=None, rois=None,
         rois = [(0, 0, width, height)]
 
     # Now iterate reading one future frame at a time and compute difference with the oldest buffered frame
-    for idx in tqdm(range(num_frames - lag_frames)):
+    for idx in Progress(range(num_frames - lag_frames)):
         # read the future frame (frame index = idx + lag_frames)
         ret, fut = cap.read()
         if not ret:

@@ -12,13 +12,15 @@ import pynapple as nap
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 from scipy.signal import hilbert
 from scipy.ndimage import gaussian_filter1d
+from scipy.spatial import cKDTree
 from mimo_pack.plot.map import wave_map
 from mimo_pack.plot.histogram import stairs_fl
 from mimo_pack.plot.xarray import pcolormesh
 from mimo_pack.fileio.ap import load_ap_windows_raw
+from mimo_pack.util.array import trimmed_mean
 from mimo_pack.consts import DIM_TIME, DIM_CHAN, COORD_X, COORD_Y, COORD_SHANK
 
 def plot_physpikes_summary(spks, save_dir):
@@ -276,7 +278,7 @@ def mean_waveform(times, bin_memmap, **kwargs):
 
     waveforms, sub_flag = sample_waveforms(times, bin_memmap, **kwargs)
     waveform = waveforms-np.mean(waveforms, axis=1)[:, np.newaxis, :]
-    mean_waveform = np.mean(waveform, axis=0)
+    mean_waveform = trimmed_mean(waveform, axis=0)
     return mean_waveform, sub_flag
 
 
@@ -533,43 +535,37 @@ def amp_cutoff(spk_a):
     return float(miss_prob)
 
 def waveform_spread(
-    peak_map: dict[str, object] | xr.DataArray | npt.ArrayLike | None,
-    x_pos: npt.ArrayLike | None = None,
-    y_pos: npt.ArrayLike | None = None,
+    waveform_obj: dict[str, object] | xr.DataArray | None,
 ) -> float:
     """
-    Calculates the spread of the waveform across channels
-    by measuring the radius of the halfwidth.
+    Calculates the spatial spread of a unit's waveform as the maximum distance
+    from the peak channel to any channel above half the peak amplitude, after
+    median filtering the amplitudes across neighboring sites.
 
     Parameters
     ----------
-    peak_map : dict, xarray.DataArray, array-like, or None
+    waveform_obj : dict, xarray.DataArray, or None
         Unit waveform metadata or a full-probe mean waveform. Metadata uses
         'full_waveform' when available, otherwise 'waveform'. Waveforms must
         have spike-relative sample indices and channel coordinates ch_x/ch_y.
         Channel amplitudes are the largest absolute values within +/-5 samples
         of the spike time, matching `extract_peak_channel_waveform`.
-        The legacy form accepts a one-dimensional channel amplitude map with
-        explicit x_pos and y_pos. None represents a missing unit.
-    x_pos : array-like, optional
-        Channel x coordinates in microns, required only for an amplitude map.
-    y_pos : array-like, optional
-        Channel y coordinates in microns, required only for an amplitude map.
+        None represents a missing unit.
+
     Returns
     -------
     spread : float
-        Maximum Euclidean distance from the peak channel to any channel
-        strictly above half the peak amplitude, in microns. Zero for a
-        zero-amplitude waveform or when only the peak exceeds half maximum.
-        NaN for a missing unit.
+        Maximum Euclidean distance, in microns, from the peak channel to any
+        channel strictly above half the peak amplitude of the filtered
+        amplitudes. Zero for a zero-amplitude waveform or when only the peak
+        exceeds half maximum. NaN for a missing unit.
 
     Raises
     ------
     TypeError
         If waveform metadata has an invalid type.
     ValueError
-        If waveform data or coordinates are invalid, or coordinate arguments
-        are supplied alongside a waveform rather than an amplitude map.
+        If waveform data or coordinates are invalid.
 
     Examples
     --------
@@ -577,52 +573,35 @@ def waveform_spread(
 
     Notes
     -----
-    This retains the half-maximum radius definition, including all probe
-    channels above threshold; it does not impose a connected-region or
-    same-shank restriction. It does not update stored quality metadata.
+    Each channel's amplitude is replaced by the median of its own amplitude
+    and those of its 4 nearest channels (Euclidean distance over ch_x/ch_y;
+    all channels if fewer than 5). This removes isolated outlier channels that
+    would otherwise set the maximum distance. The filtered amplitudes
+    determine both the peak channel and the half-maximum threshold. Channels
+    above threshold are not required to be connected or on the same shank.
+    It does not update stored quality metadata.
     """
 
-    if peak_map is None:
-        if x_pos is not None or y_pos is not None:
-            raise ValueError("Do not supply coordinates for a missing waveform.")
+    if waveform_obj is None:
         return float('nan')
-    if isinstance(peak_map, (dict, xr.DataArray)):
-        if x_pos is not None or y_pos is not None:
-            raise ValueError("Waveforms use their own channel coordinates; omit x_pos and y_pos.")
-        wave_da, peak_map_abs = _waveform_channel_amplitudes(peak_map)
-        for coord in (COORD_X, COORD_Y):
-            if coord not in wave_da.coords or wave_da[coord].dims != (DIM_CHAN,):
-                raise ValueError(f"Waveform must have a '{coord}' coordinate along '{DIM_CHAN}'.")
-        x_pos = np.asarray(wave_da[COORD_X].values, dtype=float)
-        y_pos = np.asarray(wave_da[COORD_Y].values, dtype=float)
-    else:
-        if x_pos is None or y_pos is None:
-            raise ValueError("An amplitude map requires both x_pos and y_pos.")
-        peak_map_abs = np.abs(np.asarray(peak_map, dtype=float))
-        x_pos = np.asarray(x_pos, dtype=float)
-        y_pos = np.asarray(y_pos, dtype=float)
+    wave_da, amps = _waveform_channel_amplitudes(waveform_obj)
+    for coord in (COORD_X, COORD_Y):
+        if coord not in wave_da.coords or wave_da[coord].dims != (DIM_CHAN,):
+            raise ValueError(f"Waveform must have a '{coord}' coordinate along '{DIM_CHAN}'.")
+    pos = np.column_stack([wave_da[COORD_X].values, wave_da[COORD_Y].values]).astype(float)
+    if not np.isfinite(pos).all():
+        raise ValueError("Channel coordinates must be finite.")
 
-    if (peak_map_abs.ndim != 1 or not peak_map_abs.size
-            or x_pos.shape != peak_map_abs.shape or y_pos.shape != peak_map_abs.shape):
-        raise ValueError("Channel amplitudes and coordinates must be nonempty, matching 1-D arrays.")
-    if not all(np.isfinite(arr).all() for arr in (peak_map_abs, x_pos, y_pos)):
-        raise ValueError("Channel amplitudes and coordinates must be finite.")
+    # the nearest neighbors of each channel, including itself
+    k = min(5, len(pos))
+    neighbors = cKDTree(pos).query(pos, k=k)[1].reshape(len(pos), k)
+    amps = np.median(amps[neighbors], axis=1)
 
-    # get the peak channel
-    peak_chan = np.argmax(peak_map_abs)
-    peak_x = x_pos[peak_chan]
-    peak_y = y_pos[peak_chan]
-
-    # get the furthest channel whose peak value is above half the maximum
-    half_max = np.max(peak_map_abs)/2
-    above_half = np.where(peak_map_abs > half_max)[0]
+    peak_chan = np.argmax(amps)
+    above_half = np.where(amps > amps[peak_chan] / 2)[0]
     if above_half.size == 0:
-        return 0.0  # no channels above half max, spread is zero
-    
-    chan_dists = np.sqrt((x_pos[above_half] - peak_x)**2 + 
-                         (y_pos[above_half] - peak_y)**2)
-    spread = np.max(chan_dists)  # maximum distance from peak channel to any channel above half max
-    return float(spread)
+        return 0.0
+    return float(np.max(np.linalg.norm(pos[above_half] - pos[peak_chan], axis=1)))
 
 def waveform_snr(waveforms, mode='resid', mean_waveform=None):
     """
@@ -700,7 +679,7 @@ def waveform_envelope(waveform):
 
     return envelope
 
-def add_waveform_metrics(spks, dcl_file, n_spikes=1000, wave_period=[-1.0, 2.0], 
+def add_waveform_metrics(spks, dcl_file, n_spikes=100, wave_period=[-1.0, 2.0], 
                          snr_mode='resid', exclude_channels=384, verbose=True):
     """
     Add waveform metrics to each unit in the spike sorting output.
@@ -713,7 +692,7 @@ def add_waveform_metrics(spks, dcl_file, n_spikes=1000, wave_period=[-1.0, 2.0],
     dcl_file : str
         Path to the DCL file associated with the spike sorting output.
     n_spikes : int, optional
-        Number of spikes to sample for waveform extraction. Default is 1000.
+        Number of spikes to sample for waveform extraction. Default is 100.
     wave_period : list, optional
         Time window around each spike to extract waveform in ms. 
         Default is [-1.0, 2.0].
@@ -732,8 +711,10 @@ def add_waveform_metrics(spks, dcl_file, n_spikes=1000, wave_period=[-1.0, 2.0],
 
     Notes
     -----
-    WaveformSpread uses full-probe amplitudes within +/-5 samples of spike
-    time. Stored positions and neighborhood-based quality metrics retain
+    WaveformSpread is the maximum distance (microns) from the peak channel to
+    any channel above half the peak amplitude, using full-probe amplitudes
+    within +/-5 samples of spike time after a 5-nearest-site median filter.
+    Stored positions and neighborhood-based quality metrics retain
     their existing whole-window L2-norm channel selection.
     """
 
@@ -778,7 +759,7 @@ def add_waveform_metrics(spks, dcl_file, n_spikes=1000, wave_period=[-1.0, 2.0],
     cutoff_list = []
     amp_hist_list = []
 
-    iter_list = tqdm(spks.keys(), desc="Processing Units") if verbose else spks.keys()
+    iter_list = Progress(spks.keys(), desc="Processing Units") if verbose else spks.keys()
 
     for uid in iter_list:
         spks_dcl.reset()
@@ -807,7 +788,7 @@ def add_waveform_metrics(spks, dcl_file, n_spikes=1000, wave_period=[-1.0, 2.0],
 
         waves = waves[:, sort_inds, :]  # Sort channels to match coordinate arrays
         # 2. Compute Mean and Spatial Peak
-        mean_wave = np.mean(waves, axis=2) # (Samples, Channels)
+        mean_wave = trimmed_mean(waves, axis=2) # (Samples, Channels)
         amp_map_val = np.linalg.norm(mean_wave, axis=0)
         peak_chan = np.argmax(amp_map_val)
         
@@ -1007,7 +988,7 @@ def run_qc_report(spks, report_path=None, ref_period=0.002, verbose=True):
     
     has_waves = 'WaveformSNR' in spks.metadata_columns
     
-    iter_list = tqdm(spks.keys(), desc="QC Analysis") if verbose else spks.keys()
+    iter_list = Progress(spks.keys(), desc="QC Analysis") if verbose else spks.keys()
 
     for uid in iter_list:
         unit = spks[uid]

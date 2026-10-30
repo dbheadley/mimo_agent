@@ -3,7 +3,7 @@
 # Date: 2025-07-22
 
 import numpy as np
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 from sklearn.linear_model import HuberRegressor
 from scipy.signal import filtfilt
 
@@ -207,7 +207,7 @@ def rolling_linear_regression(y : np.ndarray, x : np.ndarray, window_size : int,
     # --- Perform Rolling Regression ---
     # Start the loop from the first point where a full window is available
     if verbose:
-        iter_obj = tqdm(range(window_size - 1, n), desc="Rolling Regression")
+        iter_obj = Progress(range(window_size - 1, n), desc="Rolling Regression")
     else:
         iter_obj = range(window_size - 1, n)
 

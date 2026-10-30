@@ -12,7 +12,7 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
-from mimo_pack.consts import DIM_TIME, DIM_CHAN, COORD_X, COORD_Y, COORD_SHANK, ATTR_UNITS
+from mimo_pack.consts import DIM_TIME, DIM_FREQ, DIM_CHAN, COORD_X, COORD_Y, COORD_SHANK, ATTR_UNITS
 from mimo_pack.plot.colors import MIMO_PALETTE, MIMO_SEQ_CMAP
 from mimo_pack.plot.map import _amp_map_numpy
 from mimo_pack.plot.timeseries import stacked_lines
@@ -471,3 +471,101 @@ def unit_lfp_mapping(spks, lfp, jitter=30, ax=None):
     ax.set_title('Unit to LFP Channel Mapping')
 
     return ax
+
+
+# ---------------------------------------------------------------------------
+# plot_lfp_qc
+# ---------------------------------------------------------------------------
+
+def plot_lfp_qc(lfp, all_sites, freq_range=(1, 150), title=None):
+    """One-page QC figure for the LFP of a single probe.
+
+    The figure has a probe-layout panel (all sites in grey, sites selected
+    for the LFP in color), a channel RMS map, and a heatmap of the
+    time-averaged power spectrum in dB (1 Hz bins) with one panel per shank,
+    each ordered by depth.
+
+    Parameters
+    ----------
+    lfp : xr.DataArray
+        LFP with ``DIM_TIME`` and ``DIM_CHAN`` dimensions and ``COORD_X``,
+        ``COORD_Y`` and ``COORD_SHANK`` coordinates along ``DIM_CHAN``.
+    all_sites : xr.DataArray
+        Any DataArray carrying ``COORD_X`` and ``COORD_Y`` coordinates for
+        every site on the probe (used only for the layout panel).
+    freq_range : tuple of float, optional
+        Lowest and highest frequency (Hz) shown in the spectrum heatmap.
+        Default is ``(1, 150)``.
+    title : str or None, optional
+        Figure title.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+
+    Raises
+    ------
+    TypeError
+        If *lfp* or *all_sites* is not an ``xr.DataArray``.
+    ValueError
+        If required coordinates are missing.
+
+    Examples
+    --------
+    >>> from mimo_pack.testing import synthetic_lfp
+    >>> lfp = synthetic_lfp(duration=10.0, fs=1000, n_chans=8, seed=42)
+    >>> fig = plot_lfp_qc(lfp, lfp)  # doctest: +SKIP
+    """
+    from mimo_pack.analysis.spectral import stft
+    from mimo_pack.plot.xarray import pcolormesh
+    from mimo_pack.util.xarray import get_fs
+
+    _validate_probe_coords(lfp, require_shank=True)
+    _validate_probe_coords(all_sites)
+
+    # float32 avoids integer overflow when squaring raw int16 LFP
+    lfp = lfp.astype(np.float32)
+    units = lfp.attrs.get(ATTR_UNITS, '')
+    rms = np.sqrt((lfp ** 2).mean(DIM_TIME))
+    rms.attrs[ATTR_UNITS] = f'{units} RMS' if units else 'RMS'
+
+    # mfft equal to fs gives 1 Hz frequency bins
+    spec = stft(lfp, window=1.0, mfft=int(round(get_fs(lfp)))).mean(DIM_TIME)
+    spec = spec.sel({DIM_FREQ: slice(freq_range[0] - 0.5, freq_range[1] + 0.5)})
+    spec_db = 10 * np.log10(spec)
+    vmin, vmax = np.nanpercentile(spec_db.values, [1, 99])
+
+    fig = plt.figure(figsize=(12, 9), layout='constrained')
+    gs = fig.add_gridspec(2, 2)
+
+    ax = fig.add_subplot(gs[0, 0])
+    probe_layout(all_sites.drop_vars(COORD_SHANK, errors='ignore'), chan_labels=False, ax=ax,
+                 scat_args={'s': 8, 'c': '0.85', 'edgecolor': 'none'})
+    probe_layout(lfp, chan_labels=False, ax=ax,
+                 scat_args={'s': 30, 'edgecolor': 'black', 'linewidth': 0.3})
+    ax.set_title('Probe sites (grey: all, color: LFP)')
+
+    ax = fig.add_subplot(gs[0, 1])
+    channel_values(rms, ax=ax)
+    ax.set_title('Channel RMS')
+
+    shanks = np.unique(spec_db[COORD_SHANK].values)
+    sub_gs = gs[1, :].subgridspec(1, len(shanks), wspace=0.08)
+    axs = []
+    for i, shank in enumerate(shanks):
+        ax = fig.add_subplot(sub_gs[0, i], sharey=axs[0] if axs else None)
+        shank_spec = spec_db.isel({DIM_CHAN: np.flatnonzero(spec_db[COORD_SHANK].values == shank)})
+        _, _, mesh = pcolormesh(shank_spec.sortby(COORD_Y), row_coord=COORD_Y,
+                                col_coord=DIM_FREQ, vmin=vmin, vmax=vmax, ax=ax)
+        ax.set_title(f'shank {int(shank)}', fontsize=9)
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Y Position (µm)' if i == 0 else '')
+        if i > 0:
+            ax.tick_params(labelleft=False)
+        axs.append(ax)
+    fig.colorbar(mesh, ax=axs, label='Power (dB)')
+
+    if title is not None:
+        fig.suptitle(title)
+
+    return fig

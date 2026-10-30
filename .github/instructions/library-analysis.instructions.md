@@ -26,7 +26,7 @@ applyTo:
 
 - Public APIs outside `math/` should accept rich objects, not raw arrays or standalone file paths.
 - Outside `math/`, extract `fs` from `data.attrs[ATTR_FS]` or a utility helper; do not accept it as a separate public parameter.
-- Validate input types, dimensions, and required attrs with actionable `TypeError` and `ValueError` messages.
+- Validate only what the function truly requires (e.g. a needed dimension or coordinate), with one short actionable message per check; see `.github/instructions/coding-style.instructions.md`.
 - Use `.values` only for the inner numeric compute step; keep alignment, coords, and attrs in xarray/pynapple.
 - Append to the `description` attr when transforming a `DataArray`.
 - Preserve spatial coordinates such as `COORD_X`, `COORD_Y`, and `COORD_SHANK` through transformations.
@@ -34,7 +34,7 @@ applyTo:
 ## Recommendations
 
 - Reuse `mimo_pack.util.xarray` helpers before writing new windowing, resampling, z-scoring, channel-selection, or concatenation code.
-- Favor the smallest local edit that keeps module boundaries intact.
+- Follow `.github/instructions/coding-style.instructions.md`; favor the smallest local edit that keeps module boundaries intact.
 - Keep docstrings numpy-style and include examples when the public API changes.
 
 ## Required Outcomes
@@ -42,4 +42,3 @@ applyTo:
 - Correct module placement.
 - Rich-object inputs and outputs.
 - Provenance preserved in attrs.
-- Matching test coverage added or updated.

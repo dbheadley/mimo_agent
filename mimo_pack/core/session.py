@@ -31,7 +31,7 @@ def scan_sessions(root_dir, exclude_dirs=['images', 'skip'], verbose=True):
         Any directory whose name matches will not be entered or searched.
         Defaults to ``'images'``.
     verbose : bool, optional
-        If ``True``, display a ``tqdm`` progress bar while scanning directories.
+        If ``True``, display a ``Progress`` bar while scanning directories.
         Defaults to ``False``.
 
     Returns
@@ -82,8 +82,8 @@ def scan_sessions(root_dir, exclude_dirs=['images', 'skip'], verbose=True):
             yield from _iter_dirs(entry)
 
     if verbose:
-        from tqdm import tqdm
-        _scan = tqdm(_iter_dirs(root_dir), desc='Scanning directories', unit='dir')
+        from mimo_pack.util.progress import Progress
+        _scan = Progress(_iter_dirs(root_dir), desc='Scanning directories', unit='dir')
     else:
         _scan = _iter_dirs(root_dir)
 

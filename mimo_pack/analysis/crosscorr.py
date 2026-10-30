@@ -10,7 +10,7 @@ import pandas as pd
 import pynapple as nap
 from numba import njit
 from scipy.stats import poisson as sp_poisson
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 
 def cc_to_prob(cc, counts=None, norm=True):
     """
@@ -145,7 +145,7 @@ def ccg_convolution_significance(cc, kernel_half_width=5):
     p_vals_ex   = pd.DataFrame(np.nan, index=cc.index, columns=cc.columns)
     p_vals_in   = pd.DataFrame(np.nan, index=cc.index, columns=cc.columns)
 
-    for col in tqdm(cc.columns, desc='CCG significance', leave=False):
+    for col in Progress(cc.columns, desc='CCG significance'):
         counts = cc[col].values.astype(float)
         bl_ex  = moving_median_baseline(counts, win)
         bl_in  = moving_median_baseline(counts, 2 * win)
@@ -304,7 +304,7 @@ def find_significant_connections(p_vals_ex, p_vals_in, baseline_ex, baseline_in,
     neg_window = (lags >= -lag_max_abs) & (lags < -lag_min_abs)
 
     connections = []
-    for col in tqdm(cc.columns, desc='Finding connections', leave=False):
+    for col in Progress(cc.columns, desc='Finding connections'):
         unit_i, unit_j = col
         counts     = cc[col].values.astype(float)
         bl_ex      = baseline_ex[col].values.astype(float)
@@ -474,7 +474,7 @@ def jitter_spike_times(spike_times, jitter_window=0.004, n_surrogates=1, seed=No
 
 
 def ccg_jitter_significance(spks, cc, jitter_window=0.004, n_surrogates=1000,
-                            n_jobs=1, seed=None, p_method='poisson'):
+                            n_jobs=1, seed=None, p_method='empirical'):
     """
     Compute per-bin p-values for cross-correlograms against interval-jitter
     surrogates of the target unit.
@@ -505,16 +505,18 @@ def ccg_jitter_significance(spks, cc, jitter_window=0.004, n_surrogates=1000,
         Number of threads used across pairs; -1 uses all CPUs. Default is 1.
     seed : int, optional
         Seed for reproducible surrogates. Results do not depend on ``n_jobs``.
-    p_method : {'poisson', 'empirical'}, optional
-        ``'poisson'`` (default) computes Poisson tail probabilities with mean
-        equal to the surrogate mean. Under target jitter each bin count is a
-        sum of independent Bernoulli variables (Poisson-binomial), whose
-        variance does not exceed its mean, so Poisson tails are conservative.
-        Unlike empirical p-values, they can resolve small significance
-        thresholds used by :func:`find_significant_connections`.
-        ``'empirical'`` returns ``(1 + #{surrogate >= count}) / (1 + N)``
-        (excitatory) and ``(1 + #{surrogate <= count}) / (1 + N)``
-        (inhibitory); these cannot fall below ``1 / (1 + n_surrogates)``.
+    p_method : {'empirical', 'poisson'}, optional
+        ``'empirical'`` (default) returns
+        ``(1 + #{surrogate >= count}) / (1 + N)`` (excitatory) and
+        ``(1 + #{surrogate <= count}) / (1 + N)`` (inhibitory); these cannot
+        fall below ``1 / (1 + n_surrogates)``, so ``n_surrogates`` must exceed
+        ``1 / alpha`` to resolve the significance threshold used by
+        :func:`find_significant_connections`.
+        ``'poisson'`` computes Poisson tail probabilities with mean equal to
+        the surrogate mean. Under target jitter each bin count is a sum of
+        independent Bernoulli variables (Poisson-binomial), whose variance
+        does not exceed its mean, so Poisson tails are conservative. Unlike
+        empirical p-values, they can resolve arbitrarily small thresholds.
 
     Returns
     -------
@@ -594,7 +596,7 @@ def ccg_jitter_significance(spks, cc, jitter_window=0.004, n_surrogates=1000,
 
     n_workers = os.cpu_count() if n_jobs in (-1, None) else max(1, int(n_jobs))
     surrogates = [None] * len(columns)
-    with tqdm(total=len(columns), desc='CCG jitter', leave=False) as pbar:
+    with Progress(total=len(columns), desc='CCG jitter') as pbar:
         if n_workers == 1:
             for i in range(len(columns)):
                 surrogates[i] = run_pair(i)

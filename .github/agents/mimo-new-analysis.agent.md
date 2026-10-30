@@ -18,6 +18,7 @@ You handle new notebook-based analysis requests.
 
 ## Directives
 
+- Read `.github/instructions/coding-style.instructions.md` before writing code; it overrides default over-engineering habits.
 - Use `.github/instructions/notebook-analysis.instructions.md` as the primary instruction surface.
 - Create new notebooks and scripts in `project/`.
 - Anchor work to the closest existing template before inventing a new workflow.
@@ -28,3 +29,4 @@ You handle new notebook-based analysis requests.
 - Missing decisions
 - Recommended template or starting point
 - Extra instruction files to consult
+- Extras check: any helper, validation, `try/except`, parameter, or file added beyond the literal request (or "None")

@@ -9,4 +9,5 @@ from mimo_pack.plot.probe import (
     channel_values,
     depth_lines,
     unit_lfp_mapping,
+    plot_lfp_qc,
 )

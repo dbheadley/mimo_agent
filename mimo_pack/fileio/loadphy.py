@@ -7,11 +7,12 @@ import pandas as pd
 import numpy as np
 import dclut as dcl
 import xarray as xr
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 import sys
 import os
 
 from mimo_pack.fileio.ap import load_ap_windows_raw
+from mimo_pack.util.array import trimmed_mean
 from mimo_pack.consts import DIM_TIME, DIM_CHAN, COORD_X, COORD_Y, COORD_SHANK
 
 def load_phy_spikes(phy_dir, dcl_file=None, suffix="", cluster_ids=None, 
@@ -140,7 +141,7 @@ def load_phy_spikes(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
     # Create Tsd objects (Time Series Data)
     # We store the raw indices (curr_inds) as the data payload
     spk_dict = {}
-    iter_list = tqdm(clu_id_list, desc="Loading Spikes") if verbose else clu_id_list
+    iter_list = Progress(clu_id_list, desc="Loading Spikes") if verbose else clu_id_list
 
     for cid in iter_list:
         mask = clu_ids == cid
@@ -171,7 +172,7 @@ def load_phy_spikes(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
     if extract_waveforms and dcl_file is not None:
         if verbose:
             print("Getting spike waveform properties...")
-            wav_iter = tqdm(clu_id_list, desc="Extracting Waveforms", unit="cluster")
+            wav_iter = Progress(clu_id_list, desc="Extracting Waveforms", unit="cluster")
         else:
             wav_iter = clu_id_list
 
@@ -200,7 +201,7 @@ def load_phy_spikes(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
             # get mean spike waveform
             # subtract trend baseline from each spike
             waves = waves - np.linspace(waves[0, :, :], waves[-1, :, :], 90) 
-            mean_wave = np.mean(waves, axis=2)
+            mean_wave = trimmed_mean(waves, axis=2)
 
             # identify 8 channels near where the spike waveform is largest
             # get min or max (whicher is larger magnitude) for each channel
@@ -338,7 +339,7 @@ def as_pynapple(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
     spk_inds_dict = {}
     if verbose:
         print("Assigning spikes to clusters")
-        clu_iter = tqdm(clu_id_list, desc="Assigning: ", unit="cluster")
+        clu_iter = Progress(clu_id_list, desc="Assigning: ", unit="cluster")
     else:
         clu_iter = clu_id_list
 
@@ -384,7 +385,7 @@ def as_pynapple(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
     if dcl_file is not None:
         if verbose:
             print("Getting spike waveform properties")
-            clu_iter = tqdm(clu_id_list, desc="Assigning: ", unit="cluster")
+            clu_iter = Progress(clu_id_list, desc="Assigning: ", unit="cluster")
         else:
             clu_iter = clu_id_list
 
@@ -413,7 +414,7 @@ def as_pynapple(phy_dir, dcl_file=None, suffix="", cluster_ids=None,
             # get mean spike waveform
             # subtract trend baseline from each spike
             waves = waves - np.linspace(waves[0,:,:], waves[-1,:,:], 90) 
-            mean_wave = np.mean(waves, axis=2)
+            mean_wave = trimmed_mean(waves, axis=2)
 
             # identify 8 channels near where the spike waveform is largest
             # get min or max (whicher is larger magnitude) for each channel

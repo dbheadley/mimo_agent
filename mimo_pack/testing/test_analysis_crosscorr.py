@@ -462,7 +462,7 @@ def _counts_from_group(grp, windowsize=0.02):
                         index=cc_norm.index, columns=cc_norm.columns)
 
 
-def _detect_jitter(grp, cc, n_surrogates=200, **kwargs):
+def _detect_jitter(grp, cc, n_surrogates=1000, **kwargs):
     p_ex, p_in, bl_ex, bl_in = ccg_jitter_significance(
         grp, cc, n_surrogates=n_surrogates, seed=0, **kwargs)
     return find_significant_connections(

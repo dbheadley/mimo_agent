@@ -28,3 +28,33 @@ def split_copy(array, *args, **kwargs):
     """
     
     return [np.copy(x) for x in np.split(array, *args, **kwargs)]
+
+
+def trimmed_mean(array, axis, trim=0.05):
+    """
+    Mean over an axis after discarding the items farthest from the mean.
+
+    Each item along `axis` (e.g., one spike waveform) is ranked by its L2
+    distance from the mean of all items. The farthest `trim` fraction is
+    discarded and the mean of the remaining items is returned.
+
+    Parameters
+    ----------
+    array : np.ndarray
+        The array to average.
+    axis : int
+        The axis whose items are ranked and averaged over.
+    trim : float, optional
+        Fraction of items to discard. Default is 0.05.
+
+    Returns
+    -------
+    np.ndarray
+        The trimmed mean with `axis` removed.
+    """
+
+    items = np.moveaxis(array, axis, 0)
+    flat = items.reshape(items.shape[0], -1)
+    dist = np.linalg.norm(flat - flat.mean(axis=0), axis=1)
+    keep = np.argsort(dist)[:items.shape[0] - int(trim * items.shape[0])]
+    return items[keep].mean(axis=0)

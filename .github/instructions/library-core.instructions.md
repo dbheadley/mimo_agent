@@ -11,7 +11,7 @@ applyTo:
 1. Before editing any `mimo_pack/` file, read `mimo_pack/DESIGN_RULES.md`, `mimo_pack/consts.py`, and `environment.yml`.
 2. If the change is in `mimo_pack/plot/`, also consult `.github/instructions/library-plotting.instructions.md`.
 3. If the change is in `mimo_pack/analysis/`, `mimo_pack/preprocess/`, `mimo_pack/math/`, or `mimo_pack/util/`, also consult `.github/instructions/library-analysis.instructions.md`.
-4. If the change adds or updates tests, also consult `.github/instructions/library-testing.instructions.md`.
+4. Only if the user explicitly asked for tests, also consult `.github/instructions/library-testing.instructions.md`.
 5. If the change touches SpikeGLX, CatGT, dclut, Phy, NIDQ sync, or loader selection, also consult `.github/instructions/data-loading-time-alignment.instructions.md`.
 6. If the task needs xarray/pynapple interop or helper lookup, also consult `.github/instructions/interop-utilities.instructions.md`.
 
@@ -47,6 +47,6 @@ applyTo:
 
 ## Completion Expectations
 
-- Keep changes minimal and local to the owning abstraction.
+- Keep changes minimal and local to the owning abstraction; follow `.github/instructions/coding-style.instructions.md`.
 - Preserve coordinates, attrs, and provenance when transforming rich objects.
-- Add or update targeted tests when behavior changes.
+- Do not add or update tests unless the user explicitly asks.

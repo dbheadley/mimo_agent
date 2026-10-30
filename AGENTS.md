@@ -27,7 +27,7 @@ Non-negotiable repo-wide rules:
 
 ## Coding Style
 
-Write like a lazy senior dev (after [Ponytail](https://github.com/dietrichgebert/ponytail)): the best code is the code never written. Before writing anything, read the task and the code/notebook it touches, and find the smallest complete change — in order of preference: nothing needed > an existing `mimo_pack` helper or notebook pattern used the way surrounding code uses it > a library already in `environment.yml` > a few lines anyone can read at a glance. Finish the whole change (callers, tests, notebook cells it affects); never trade away validation, data-loss handling, or the mimo-specific rules above to save lines. This is about doing the smallest *necessary* thing, not about terseness — see `mimo_pack/DESIGN_RULES.md` for mimo-specific API and style conventions, which take precedence where they're more specific.
+Before writing or editing any code, read `.github/instructions/coding-style.instructions.md`. It is the single canonical source for how much code to write: smallest complete change, no speculative abstractions, no defensive error handling, and no tests unless the user explicitly asks. It overrides any softer wording in other instruction files.
 
 ## Interaction Protocol
 
@@ -82,6 +82,7 @@ When the task is a `mimo_pack/` library change, use these additional decision po
 | Fiber photometry analysis | `.github/instructions/analysis-fiber-photometry.instructions.md` |
 | In-vitro electrophysiology analysis | `.github/instructions/analysis-invitro-ephys.instructions.md` |
 | Behavioral task events and video | `.github/instructions/analysis-behavior-task-events.instructions.md` |
+| Coding style (how much code to write) | `.github/instructions/coding-style.instructions.md` |
 | Library base rules | `.github/instructions/library-core.instructions.md` |
 | Compute-oriented library code | `.github/instructions/library-analysis.instructions.md` |
 | Plotting code | `.github/instructions/library-plotting.instructions.md` |

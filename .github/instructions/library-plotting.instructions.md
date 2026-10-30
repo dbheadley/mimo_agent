@@ -14,8 +14,8 @@ applyTo:
    - Keep it pure matplotlib and data-array agnostic.
 3. Does the change introduce sequential, diverging, or categorical colors?
    - Use `mimo_pack.plot.colors` instead of hardcoded matplotlib defaults.
-4. Does the change alter public behavior or expected rendering structure?
-   - Also consult `.github/instructions/library-testing.instructions.md` for test updates.
+4. Did the user explicitly ask for plot tests?
+   - Then consult `.github/instructions/library-testing.instructions.md`; otherwise do not add tests.
 
 ## Directives
 

@@ -22,6 +22,7 @@ You are the top-level routing agent for this workspace.
 - Prefer the narrowest specialist that can own the task.
 - Pass along any explicit file paths, data modalities, or unresolved decision points.
 - Do not answer from broad repo context when a narrower specialist exists.
+- When handing off, tell the specialist to follow `.github/instructions/coding-style.instructions.md` (minimal code, no defensive error handling, no tests unless the user asked).
 
 ## Output Format
 

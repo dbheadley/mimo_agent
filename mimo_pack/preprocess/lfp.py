@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import dclut as dcl
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 from scipy.signal import butter, filtfilt
 from scipy.interpolate import CubicSpline
 from dclut import create_dclut
@@ -78,7 +78,7 @@ def make_lfp_file_dclut(dcl_path, lfp_path, lfp_cutoff=200, lfp_fs=1000, sync = 
     lfpf = open(lfp_path, mode='wb')
 
     if verbose:
-        iter_chunks = tqdm(range(len(chunks)-1))
+        iter_chunks = Progress(range(len(chunks)-1))
     else:
         iter_chunks = range(len(chunks)-1)
     
@@ -285,7 +285,7 @@ def make_lfp_file_spikeglx(bin_path, lfp_cutoff=200, lfp_fs=1000, suffix='lfp', 
     lfp_keep = np.arange(0, bin_dur, down_factor).astype(np.int64)
 
     if verbose:
-        iter_chunks = tqdm(range(len(chunks)-1))
+        iter_chunks = Progress(range(len(chunks)-1))
     else:
         iter_chunks = range(len(chunks)-1)
     

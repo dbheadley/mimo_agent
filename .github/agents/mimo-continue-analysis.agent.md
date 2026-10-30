@@ -18,6 +18,7 @@ You handle edits to existing notebook-based workflows.
 
 ## Directives
 
+- Read `.github/instructions/coding-style.instructions.md` before writing code; it overrides default over-engineering habits.
 - Use `.github/instructions/notebook-analysis.instructions.md` as the primary instruction surface.
 - Preserve the existing notebook's structure unless the user asks for a broader refactor.
 - Keep scope local to the active notebook workflow before generalizing to templates or library code.
@@ -28,3 +29,4 @@ You handle edits to existing notebook-based workflows.
 - Requested change type
 - Missing decisions
 - Extra instruction files to consult
+- Extras check: any helper, validation, `try/except`, parameter, or file added beyond the literal request (or "None")

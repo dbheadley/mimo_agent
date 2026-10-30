@@ -6,12 +6,14 @@ applyTo:
 
 # Testing Rules
 
+Tests are opt-in: write or change tests only when the user explicitly asks. Never add them as part of a code change by default.
+
 ## Decision Tree
 
-1. Did a public function, loader, transformation, or plot behavior change?
-   - Add or update a targeted test in the nearest existing test module or create a new focused test file.
+1. Did the user explicitly ask for a test of a public function, loader, transformation, or plot behavior?
+   - Add one happy-path test in the nearest existing test module; add more categories below only if requested.
 2. Is the change compute-oriented?
-   - Cover output type/shape, validation errors, coordinate preservation, attr preservation, and edge cases.
+   - Default to output type/shape; add validation, coordinate, attr, or edge-case tests only if requested.
 3. Is the change in plotting?
    - Assert returned `Axes` or `Figure` objects and key labels/artists rather than pixels.
 4. Do you think you need a new fixture?
@@ -24,7 +26,7 @@ applyTo:
 - Keep tests close to the changed behavior and avoid widening unrelated coverage.
 - Match the existing naming pattern: `test_analysis_<module>.py` or `test_<module>.py`.
 
-## Required Test Categories
+## Available Test Categories (only when requested)
 
 - Basic functionality.
 - Input validation.

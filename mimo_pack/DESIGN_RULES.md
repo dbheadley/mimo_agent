@@ -351,7 +351,7 @@ def evoked_lfp(lfp_trials: xr.DataArray, baseline: float = 0.0) -> xr.DataArray:
 ## 5. Error Handling
 
 ### 5.1 Input Validation
-Every public function must validate inputs immediately, before any computation:
+Public functions validate only what they truly require (typically the rich input type and any required dimension or coordinate), immediately before computation. Do not add checks beyond that; see `.github/instructions/coding-style.instructions.md`. Illustrative maximum:
 
 ```python
 def compute_csd(lfp: xr.DataArray, spacing: float = 100.0) -> xr.DataArray:
@@ -421,7 +421,7 @@ A module is considered properly implemented when:
 - [ ] No function accepts a file path string (except in `fileio/` or `core/`).
 - [ ] All public functions have Numpy-style docstrings with Parameters, Returns, Raises, and Examples.
 - [ ] All public functions have type hints in their signatures.
-- [ ] Input validation raises `TypeError` / `ValueError` with actionable messages.
-- [ ] A unit test exists using synthetic data from `mimo_pack.testing`.
+- [ ] Required-input validation raises `TypeError` / `ValueError` with actionable messages.
+- [ ] Unit tests (using synthetic data from `mimo_pack.testing`) exist only if the user asked for them.
 - [ ] The `description` attribute is populated for any newly created `DataArray`.
 - [ ] Spatial coordinates are preserved through transformations.

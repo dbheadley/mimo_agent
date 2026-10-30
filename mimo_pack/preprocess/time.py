@@ -5,7 +5,7 @@
 import numpy as np
 import pandas as pd
 from numba import njit
-from tqdm import tqdm
+from mimo_pack.util.progress import Progress
 from scipy.stats import zscore
 from dclut import dclut
 import xarray as xr
@@ -186,7 +186,7 @@ def align_sequence(ser1, ser2, matchlen, verbose=False):
     s2 = matchlen-1 # removed + 1
     pairs = []
     if verbose:
-        outer_iter = tqdm(range(matchlen, stop1))
+        outer_iter = Progress(range(matchlen, stop1))
     else:
         outer_iter = range(matchlen, stop1)
     
@@ -283,7 +283,7 @@ def align_sequence_exact(ser1, ser2, matchlen, verbose=False):
     pairs = []
 
     if verbose:
-        pbar = tqdm(total=len(ser1), desc='Aligning barcodes', unit='frames')
+        pbar = Progress(total=len(ser1), desc='Aligning barcodes', unit='frames')
 
     while s1 < len(ser1): # step through target series
         run_counter = 0
@@ -314,6 +314,8 @@ def align_sequence_exact(ser1, ser2, matchlen, verbose=False):
         s2 = left2
         s1 += 1
 
+    if verbose:
+        pbar.close()
     pairs = np.concatenate([np.stack(p,axis=1) for p in pairs])
     return pairs
 
@@ -580,7 +582,7 @@ def deserialize_barcode(ser_sig, ser_time):
     i = 0
     offset = 0
 
-    pbar = tqdm(total=len(bit_seq), desc='Deserializing barcodes', unit='bits')
+    pbar = Progress(total=len(bit_seq), desc='Deserializing barcodes', unit='bits')
     while i < (len(bit_seq)-(bc_len*(bc_chnk_len+2))):
         pbar.n = i
         pbar.refresh()
@@ -599,6 +601,7 @@ def deserialize_barcode(ser_sig, ser_time):
         bc_seq.append(np.column_stack([ind_chunk, np.dot(curr_chunk,pos_vals)]))
         i += (bc_len * bc_chnk_len)
 
+    pbar.close()
     bc_seq = np.vstack(bc_seq)
 
     # Display percentage of data that could be decoded
